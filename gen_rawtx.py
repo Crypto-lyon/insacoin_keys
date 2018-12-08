@@ -3,8 +3,9 @@ import sys
 sys.path.append('.')
 from gen_keypair import *
 import opcodes
-import secp256k1
 import binascii
+import ecdsa
+import requests
 
 """
 ====Transaction structure====
@@ -129,12 +130,14 @@ def parse_script(script):
 def der_encode(r, s):
     """
     DER-encodes a signed tx. https://bitcoin.stackexchange.com/questions/12554/why-the-signature-is-always-65-13232-bytes-long
+    https://github.com/bitcoin/bitcoin/blob/ce74799a3c21355b35fed923106d13a0f8133721/src/script/interpreter.cpp#L108
     """
     r_len = sizeof(r)
     s_len = sizeof(s)
-    total_len = (4 + r_len + s_len)
+    total_len = (4 + r_len + s_len) # 5 = 02 + r_len + 02 + s_len (all 1 byte)
     return b'\x30' + total_len.to_bytes(sizeof(total_len), 'big') + b'\x02' + r_len.to_bytes(sizeof(r_len), 'big') \
-            + r.to_bytes(sizeof(r), 'big') + s_len.to_bytes(sizeof(s_len), 'big') + s.to_bytes(sizeof(s), 'big')
+            + r.to_bytes(sizeof(r), 'big') + b'\x02' + s_len.to_bytes(sizeof(s_len), 'big') + s.to_bytes(sizeof(s), 'big')
+
 
 def sign_tx(tx, key):
     """
@@ -145,35 +148,50 @@ def sign_tx(tx, key):
     :return: Signed serialized (Bit/INSA)coin transaction.
     """
     tx_hash = double_sha256(tx, True)
-    v, r, s = secp256k1.ecdsa_raw_sign(tx_hash, key)
-    sig = der_encode(r, s) + b'\x01' # hash code
+    secexp = int.from_bytes(key, 'big')
+    sk = ecdsa.SigningKey.from_secret_exponent(secexp, curve=ecdsa.SECP256k1)
+    sig = sk.sign_digest(tx_hash, sigencode=ecdsa.util.sigencode_der_canonize) + b'\x01'
     return sig
 
 
-def create_raw(privkey, prev_hash, index, in_script, value, out_script):
+def get_scriptpubkey(txid, index, user, password):
+    """
+    Fetches the scriptpubkey from the tx which has been specified the id.
+
+    :return: The scriptpubkey as bytes
+    """
+    s = requests.Session()
+    s.auth = (user, password)
+    s.headers.update({'content-type' : 'text/plain'})
+    payload = {'jsonrpc':'1.0',
+               'id':'getscriptpubkey',
+               'method':'getrawtransaction',
+               'params':[txid, 1]}
+    r = s.post('http://127.0.0.1:7332', json=payload)
+    return binascii.unhexlify(r.json()['result']['vout'][index]['scriptPubKey']['hex'])
+
+def create_raw(privkey, prev_hash, index, script_sig, value, script_pubkey):
     """
     Creates a signed raw transaction
 
     :param privkey: bytes
     """
-    pubkey = get_pubkey(privkey)
-    in_script_len = len(in_script)
-    in_script = in_script_len.to_bytes(sizeof(in_script_len), 'big') + in_script
-    tx = serialize(prev_hash, index, in_script, value, scriptpubkey)
+    pubkey = get_pubkey(privkey + b'\x01') # Plus the compression byte
+    # Before signing the transaction, the script_sig is filled with the script_pubkey from the previous tx
+    tx = serialize(prev_hash, index, script_sig, value, script_pubkey)
     sig = sign_tx(binascii.unhexlify(tx) + b'\x01\x00\x00\x00', privkey) # + hash code type
     sig_len = len(sig)
     pub_len = len(pubkey)
-    scriptsig = sig_len.to_bytes(sizeof(sig_len), 'big') + sig + pub_len.to_bytes(sizeof(pub_len), 'big') + pubkey
-    print(binascii.hexlify(scriptsig))
-    return serialize(prev_hash, index, scriptsig, value, out_script)
+    script_sig = sig_len.to_bytes(sizeof(sig_len), 'big') + sig + pub_len.to_bytes(sizeof(pub_len), 'big') + pubkey
+    return serialize(prev_hash, index, script_sig, value, script_pubkey)
 
 
-privkey = b'\xce\xd1 `\xf6\x84\xb0\x88\xab\xd32\x19\x0b\x10\rr \xf67h\x16/f\xb5\x9b\xd0\x01\x1e\xd8\xa5>\xf4\x01'
-prev_txid = 0x6632ae48ecfc5124e52db30103f79746adb5c0b163cbb4f11b45b780497d3cdb
+privkey = wif_decode('TBTBrUVDRtKPaak6XqhxW7NUTiTQBpF2Hq9bszKiv8bg3Zc2oXUg') # To keep compression
+prev_txid = 0xfa6ab480a73737f830237693ce7ba7b66b3da300219c60e126015a16a340464d
 # Avant de la signer, le unlocking script (scriptsig) est rempli avec le locking script (scriptPubKey) de la precedente tx
-scriptsig = parse_script('OP_DUP OP_HASH160 a86c52f90b0e2ae853d8e9ea4403a4b68de7a7e0 OP_EQUALVERIFY OP_CHECKSIG')
-scriptpubkey = parse_script('OP_DUP OP_HASH160 a86c52f90b0e2ae853d8e9ea4403a4b68de7a7e0 OP_EQUALVERIFY OP_CHECKSIG')
+scriptsig = parse_script('OP_DUP OP_HASH160 53451511c482ec1d3647934551d4b6dfbeefcde4 OP_EQUALVERIFY OP_CHECKSIG')
+scriptpubkey = parse_script('OP_DUP OP_HASH160 53451511c482ec1d3647934551d4b6dfbeefcde4 OP_EQUALVERIFY OP_CHECKSIG')
 
-tx = create_raw(privkey, prev_txid, 0, scriptsig, 99000000, scriptpubkey)
-print(tx)
-decode_print(binascii.unhexlify(tx))
+tx = create_raw(privkey, prev_txid, 1, scriptsig, 98000000, scriptpubkey)
+
+print(get_scriptpubkey('fa6ab480a73737f830237693ce7ba7b66b3da300219c60e126015a16a340464d', 1, 'insacoinrpc', '5CR4JLMSMVspaq8odQH543nJHQ5RX4r5h6Sw9XRp5oL6'))
