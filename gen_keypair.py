@@ -146,8 +146,45 @@ def wif_decode(string):
     WIF-decode the provided string (which would likely be a WIF-encoded Bitcoin private key).
     """
     dec = decode_check(string)
-    if string[0] == 'K' or string[0] == 'L':
+    if string[0] == 'T': # For Bitcoin the condition is if string[0] == 'K' or 'L'
         return dec[1:-1] # bytes
     else:
         return dec[1:] # bytes
 
+
+def gen_privkey():
+    while True:
+        n = int.from_bytes(gen_random(), 'big')
+        if 0 < n < 115792089237316195423570985008687907852837564279074904382605163141518161494337:
+            return n.to_bytes(sizeof(n), 'big') + b'\x01'
+
+
+def get_pubkey(privkey):
+    if len(privkey) == 33:
+        (x, y) = secp256k1.privtopub(privkey[1:]) # privkey[1] + privkey[2] + ... + privkey[n]
+        if y % 2:
+            return b'\x02' + x.to_bytes(sizeof(x), 'big')
+        else:
+            return b'\x03' + x.to_bytes(sizeof(x), 'big')
+    else:
+        (x, y) = secp256k1.privtopub(privkey)
+        return b'\x04' + x.to_bytes(sizeof(x), 'big') + y.to_bytes(sizeof(y), 'big')
+
+
+def get_address(pubkey):
+    version = b'\x66'
+    hash = hash160(pubkey, bin=True)
+    return encode_check(version + hash)
+
+# WIF BITCOIN 80
+# WIF INSACOIN b0
+# PREFIX BIT 00
+# PREFIX INSA 66
+def get_keypair():
+    pk = gen_privkey()
+    addr = get_address(get_pubkey(pk))
+    print('Privkey : ', wif_encode(pk, prefix=b'\x0b'))
+    print('Address : ', addr)
+
+if __name__ == '__main__':
+    get_keypair()
