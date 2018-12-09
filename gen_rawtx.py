@@ -6,28 +6,10 @@ import opcodes
 import binascii
 import ecdsa
 import requests
+import time
+import socket
+import random
 
-"""
-====Transaction structure====
-version : 4 bytes
-input_count : varint
-inputs
-    previous output hash : 32 bytes
-    index : 4 bytes
-    scriptLength: varint
-    script : scriptLength bytes
-    sequence : 4 bytes
-output_count : varint
-    value : 8 bytes
-    scriptLength : varint
-    script: scriptLength bytes
-txlocktime : 4 bytes
-==============================
-"""
-
-"""
-To keep it simple, we'll use just a single output and a single input
-"""
 
 def serialize(prev_hash, index, in_script, value, out_script):
     """
@@ -401,16 +383,62 @@ class Transaction:
         tx = '0' + hex(int.from_bytes(self.serialized, 'big'))[2:]
         return self.network.send('sendrawtransaction', params=[tx])
 
+    def send_the_hard_way(self, ip):
+        """
+        Sends a transaction without using RPC, just a raw network message.
+        https://en.bitcoin.it/wiki/Protocol_documentation
+
+        :param ip: The node to which send the message. A string.
+        """
+        # First the version message
+        # https://en.bitcoin.it/wiki/Version_Handshake
+        magic = 0xddb8c2fd.to_bytes(4, 'little')
+        version = int(70003).to_bytes(4, 'little')
+        services = int(1).to_bytes(8, 'little')
+        timestamp = int(time.time()).to_bytes(8, 'little')
+        myip = socket.inet_aton(requests.get('https://api.ipify.org').text)
+        nodeip = socket.inet_aton(ip)
+        # 7333 -> insacoin
+        addr_recv = services + b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff' + myip + int(7333).to_bytes(2, 'big')
+        addr_from = services + b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff' + nodeip + int(7333).to_bytes(2, 'big')
+        #nonce = random.getrandbits(64).to_bytes(8, 'little')
+        nonce = 0x00.to_bytes(8, 'little')
+        user_agent = 0x00.to_bytes(1, 'big')
+        start_height = 0x00.to_bytes(4, 'little')
+        payload = version + services + timestamp + addr_recv + addr_from + nonce + user_agent + start_height
+        checksum = double_sha256(payload, bin=True)[:4]
+        payload_length = len(payload)
+        # NULL padded ascii command
+        version_message = magic + 'version'.encode('ascii') + b'\x00\x00\x00\x00\x00' + payload_length.to_bytes(4, 'little') + checksum + payload
+        # Now the tx message
+        checksum = double_sha256(self.serialized, bin=True)[:4]
+        tx_length = len(self.serialized)
+        tx_message = magic + 'tx'.encode('ascii') + b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' + tx_length.to_bytes(4, 'little') + checksum + self.serialized
+        # Now the verack message
+        checksum = double_sha256(b'', bin=True)[:4]
+        verack_message = magic + 'verack'.encode('ascii') + b'\x00\x00\x00\x00\x00\x00' + 0x00.to_bytes(4, 'little') + checksum
+        # Now let's connect to the node and send it our messages
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((ip, 7333))
+        s.send(version_message)
+        s.recv(1000) # receive version + verack
+        s.send(verack_message)
+        s.send(tx_message)
+        #print('Error message : ')
+        #print(s.recv(1000))
+        
+
 if __name__ == '__main__':
-    privkey = wif_decode('TBTBrUVDRtKPaak6XqhxW7NUTiTQBpF2Hq9bszKiv8bg3Zc2oXUg')
+    privkey = wif_decode('T9z15bnpSN4hoyDx5JvgirFEYoyNUtcCfmSY7Vm3nUUUCwAuAYpD')
     pubkey = get_pubkey(privkey + b'\x01') # + the compression byte
-    prev_txid = 0xfa6ab480a73737f830237693ce7ba7b66b3da300219c60e126015a16a340464d
-    scriptpubkey = parse_script('OP_DUP OP_HASH160 53451511c482ec1d3647934551d4b6dfbeefcde4 OP_EQUALVERIFY OP_CHECKSIG')
-    index = 1
+    prev_txid = 0x1cb7268e3032bbba308f9031c3c97615be1a21234cd99cfb7573e7911c7805a1
+    scriptpubkey = parse_script('OP_DUP OP_HASH160 a86c52f90b0e2ae853d8e9ea4403a4b68de7a7e0 OP_EQUALVERIFY OP_CHECKSIG')
+    index = 0
     value = 98000000 # In Satoshis
 
     myCoin = Bitcoind('http://127.0.0.1:7332', 'insacoinrpc', '5CR4JLMSMVspaq8odQH543nJHQ5RX4r5h6Sw9XRp5oL6')
     myTransaction = Transaction(myCoin, prev_txid, index, script_sig=None, value=value, script_pubkey=scriptpubkey)
     myTransaction.create_and_sign(privkey, pubkey)
-    print(myTransaction.print())
-    print(myTransaction.send())
+    #myTransaction.print()
+    print(binascii.hexlify(myTransaction.serialized))
+    myTransaction.send_the_hard_way('188.213.28.67')
