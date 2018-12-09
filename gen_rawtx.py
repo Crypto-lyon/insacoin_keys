@@ -224,7 +224,12 @@ class Transaction:
         """
         # Monkey patching of hex() erasing leading 0s
         tx = '0' + hex(int.from_bytes(self.serialized, 'big'))[2:]
-        return self.network.send('sendrawtransaction', params=[tx])
+        response = self.network.send('sendrawtransaction', params=[tx])
+        if not response['error']:
+            self.id = response['result']
+            return True
+        else:
+            return response['error']
 
     def send_the_hard_way(self, ip):
         """
@@ -272,12 +277,12 @@ class Transaction:
 
 
 if __name__ == '__main__':
-    privkey = wif_decode('T9z15bnpSN4hoyDx5JvgirFEYoyNUtcCfmSY7Vm3nUUUCwAuAYpD')
+    privkey = wif_decode('T41pKW96rRf9qfMTUeADvfiikjH2hfBkMvcL72vRjGNrHU1urucv')
     pubkey = get_pubkey(privkey + b'\x01') # + the compression byte
-    prev_txid = 0x1cb7268e3032bbba308f9031c3c97615be1a21234cd99cfb7573e7911c7805a1
-    scriptpubkey = Script('OP_DUP OP_HASH160 a86c52f90b0e2ae853d8e9ea4403a4b68de7a7e0 OP_EQUALVERIFY OP_CHECKSIG')
+    prev_txid = 0xbfab4ac581133db46f457c011a02976112f5f396e5d2b017a7df7bd34ab9306a
+    scriptpubkey = Script('OP_RETURN 6461726f73696f72')
     index = 0
-    value = 98000000 # In Satoshis
+    value = 0 # In Satoshis
 
     myCoin = Bitcoind('http://127.0.0.1:7332', 'insacoinrpc', '5CR4JLMSMVspaq8odQH543nJHQ5RX4r5h6Sw9XRp5oL6')
     myTransaction = Transaction(myCoin, prev_txid, index, script_sig=None, value=value, script_pubkey=scriptpubkey.parse())
