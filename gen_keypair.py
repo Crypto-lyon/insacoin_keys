@@ -132,7 +132,7 @@ def decode_check(string):
         return None
 
 
-def wif_encode(data, prefix=b'\x80'):
+def wif_encode(data, prefix=b'\xb0'):
     """
     WIF-encode the data (which would likely be a Bitcoin private key) provided.
 
@@ -160,8 +160,8 @@ def gen_privkey():
 
 
 def get_pubkey(privkey):
-    if len(privkey) == 33:
-        (x, y) = secp256k1.privtopub(privkey[1:]) # privkey[1] + privkey[2] + ... + privkey[n]
+    if len(privkey) == 33:  # Meaning if the privkey has a 0x01 prefix, otherwise it would be 32 bytes length
+        (x, y) = secp256k1.privtopub(privkey[1:])
         if y % 2:
             return b'\x02' + x.to_bytes(sizeof(x), 'big')
         else:
@@ -183,7 +183,7 @@ def get_address(pubkey):
 def get_keypair():
     pk = gen_privkey()
     addr = get_address(get_pubkey(pk))
-    print('Privkey : ', wif_encode(pk, prefix=b'\x0b'))
+    print('Privkey : ', wif_encode(pk))
     print('Address : ', addr)
 
 if __name__ == '__main__':
